@@ -12,6 +12,7 @@ from linopy.constraints import Constraint
 if TYPE_CHECKING:
     from linopy.constraints import ConstraintBase
     from linopy.model import Model
+    from linopy.persistent.diff import ModelDiff
     from linopy.variables import Variable, VariableLabelIndex
 
 
@@ -170,3 +171,36 @@ class ModelSnapshot:
             obj_quad_present=model.objective.is_quadratic,
             obj_sense=model.objective.sense,
         )
+
+    def advance(self, diff: ModelDiff, model: Model) -> None:
+        """Advance the snapshot in place to reflect ``diff`` applied to ``model``.
+
+        Re-extracts only the variable and constraint containers that the diff
+        marks as changed, patches the objective with the diff's index/value
+        arrays, and clears ``_coef_dirty`` on touched constraints. Cheaper
+        than :meth:`capture` whenever fewer than all containers were mutated,
+        which is the common case for warm-update orchestrators.
+
+        Caller must guarantee the diff was successfully applied to the
+        backend (no rebuild was triggered) so the snapshot stays in sync
+        with the solver state.
+        """
+        if diff.rebuild_required:
+            raise ValueError(
+                "Cannot advance snapshot from a rebuild-required diff "
+                f"({diff.rebuild_reason.value}); recapture instead."
+            )
+
+        var_label_index = model.variables.label_index
+        for name in diff.changed_variables:
+            self.var_buffers[name] = _extract_var_buffers(model.variables[name])
+        for name in diff.changed_constraints:
+            con = model.constraints[name]
+            self.con_buffers[name] = _extract_con_buffers(con, var_label_index)
+            if isinstance(con, Constraint):
+                con._coef_dirty = False
+
+        if diff.obj_c_indices is not None and diff.obj_c_values is not None:
+            self.obj_c[diff.obj_c_indices] = diff.obj_c_values
+        if diff.obj_sense is not None:
+            self.obj_sense = diff.obj_sense

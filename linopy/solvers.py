@@ -808,7 +808,10 @@ class Solver(ABC, Generic[EnvType]):
             return diff
         self.model = model
         if self.track_updates:
-            self.snapshot = ModelSnapshot.capture(model)
+            if self.snapshot is None:
+                self.snapshot = ModelSnapshot.capture(model)
+            else:
+                self.snapshot.advance(diff, model)
         self._in_place_updates += 1
         self._last_rebuild_reason = RebuildReason.NONE
         return diff
